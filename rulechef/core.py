@@ -307,6 +307,12 @@ class Example:
         source: Origin of the example ('human_labeled' or 'llm_generated').
         confidence: Confidence score for this example (0.0-1.0).
         timestamp: When the example was created.
+        split: Persistant split assignment from 'unassigned', 'train',
+            'selection', 'calibration', or 'test'. Set once by
+            splitting.assign_splits() and never silently reshuffled.
+        group: Optional grouping key. Examples sharing a group are always
+            assigned to the same split so a group never straddles a split
+            boundary. Defaults to None, meaning the example is its own group.
     """
 
     id: str
@@ -315,6 +321,8 @@ class Example:
     source: str  # "human_labeled" | "llm_generated"
     confidence: float = 0.8
     timestamp: datetime = field(default_factory=datetime.now)
+    split: str = "unassigned"
+    group: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -323,6 +331,8 @@ class Example:
             "expected_output": self.expected_output,
             "source": self.source,
             "confidence": self.confidence,
+            "split": self.split,
+            "group": self.group,
         }
 
 
@@ -340,6 +350,8 @@ class Correction:
         expected_output: The correct output the model should have produced.
         feedback: Optional free-text explanation of what went wrong.
         timestamp: When the correction was created.
+        split: Always 'train'. Corrections are explicit user fixes and
+            must always drive synthesis/patching (see splitting.assign_splits).
     """
 
     id: str
@@ -348,6 +360,7 @@ class Correction:
     expected_output: dict[str, Any]  # What it SHOULD be
     feedback: str | None = None
     timestamp: datetime = field(default_factory=datetime.now)
+    split: str = "train"
 
     def to_dict(self) -> dict:
         return {
@@ -356,6 +369,7 @@ class Correction:
             "model_output": self.model_output,
             "expected_output": self.expected_output,
             "feedback": self.feedback,
+            "split": self.split,
         }
 
 

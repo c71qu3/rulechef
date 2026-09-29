@@ -256,6 +256,39 @@ class TestExampleCorrectionFeedback:
         assert f.target_id == ""
         assert f.to_dict()["target_id"] == ""
 
+    def test_example_defaults_to_unassigned_split(self):
+        ex = Example(
+            id="e1",
+            input={"text": "hello"},
+            expected_output={"label": "a"},
+            source="human_labeled",
+        )
+        assert ex.split == "unassigned"
+        assert ex.group is None
+
+    def test_example_to_dict_includes_split_group(self):
+        ex = Example(
+            id="e1",
+            input={"text": "hello"},
+            expected_output={"label": "a"},
+            source="human_labeled",
+            split="train",
+            group="doc-1",
+        )
+        d = ex.to_dict()
+        assert d["split"] == "train"
+        assert d["group"] == "doc-1"
+
+    def test_correction_defaults_to_train_split(self):
+        c = Correction(
+            id="c1",
+            input={"text": "fix me"},
+            model_output={"label": "a"},
+            expected_output={"label": "b"},
+        )
+        assert c.split == "train"
+        assert c.to_dict()["split"] == "train"
+
 
 # =========================================================================
 # Dataset
