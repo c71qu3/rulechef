@@ -6,7 +6,7 @@ import re as re_mod
 import time
 from typing import TYPE_CHECKING
 
-from rulechef.core import Correction, Example, Rule
+from rulechef.core import Correction, Dataset, Example, Rule
 
 if TYPE_CHECKING:
     from rulechef.engine import RuleChef
@@ -65,6 +65,18 @@ class LearningPipeline:
             )
             return
 
+        # Assign persistent split roles
+        from rulechef.splitting import assign_splits, select_split
+
+        if holdout_fraction:
+            print(
+                "learn_rules(holdout_fraction=...) is deprecated and ignored"
+            )
+        split_report = assign_splits(chef.dataset, seed=split_seed)
+        if split_report.exploratory:
+            print(f"Exploratory split ({split_report.reason})")
+        train_dataset = select_split(chef.dataset, "train")
+
         # Smart default: disable evaluation for tiny datasets
         if run_evaluation is None:
             run_evaluation = total_data >= 3
@@ -83,7 +95,7 @@ class LearningPipeline:
 
         try:
             # Step 5: Synthesize rules
-            rules = self._synthesize(incremental_only)
+            rules = self._synthesize(incremental_only, train_dataset)
             if rules is None:
                 return None
 
@@ -94,8 +106,6 @@ class LearningPipeline:
                     chef.dataset,
                     max_iterations=max_refinement_iterations,
                     coordinator=chef.coordinator,
-                    holdout_fraction=holdout_fraction,
-                    split_seed=split_seed,
                 )
             else:
                 eval_result = None
@@ -112,10 +122,11 @@ class LearningPipeline:
             # validated_precision=None into persistence and conflict
             # resolution. Uses the same deterministic split as the learner.
             if run_evaluation and rules:
-                from rulechef.splitting import split_dataset
+                from rulechef.splitting import is_reliable, select_split
 
-                _, dev_ds = split_dataset(chef.dataset, holdout_fraction, seed=split_seed)
-                chef.learner._stamp_validated_stats(rules, dev_ds or chef.dataset)
+                calibration_ds = select_split(chef.dataset, "calibration")
+                stamp_ds = calibration_ds if is_reliable(calibration_ds) else train_dataset
+                chef.learner._stamp_validated_stats(rules, stamp_ds)
                 chef._store.save(chef.dataset)
 
             elapsed = time.time() - start_time
@@ -230,13 +241,13 @@ class LearningPipeline:
             f"{len(chef.dataset.examples)} examples"
         )
 
-    def _synthesize(self, incremental_only: bool) -> list[Rule] | None:
-        """Run rule synthesis (full or incremental)."""
+    def _synthesize(self, incremental_only: bool, train_dataset: Dataset) -> list[Rule] | None:
+        """Run rule synthesis (full or incremental) against train examples only."""
         chef = self._chef
 
         if incremental_only and chef.dataset.rules:
             print("Incremental mode: patching existing rules")
-            pre_eval = chef.learner._evaluate_rules(chef.dataset.rules, chef.dataset)
+            pre_eval = chef.learner._evaluate_rules(chef.dataset.rules, train_dataset)
 
             # If there's feedback but no failures, create a synthetic
             # failure entry so the patch prompt still fires with feedback
@@ -245,7 +256,7 @@ class LearningPipeline:
             if not failures and has_feedback:
                 print("  No failures found but feedback exists — forcing refinement with feedback")
                 # Use a small sample of training data as context
-                sample = chef.dataset.get_all_training_data()[:3]
+                sample = train_dataset.get_all_training_data()[:3]
                 failures = [
                     {
                         "input": item.input,
@@ -260,7 +271,7 @@ class LearningPipeline:
             patch_rules, deleted_names = chef.learner.synthesize_patch_ruleset(
                 chef.dataset.rules,
                 failures,
-                dataset=chef.dataset,
+                dataset=train_dataset,
             )
             return self._merge_rules(chef.dataset.rules, patch_rules, deleted_names)
         else:
@@ -269,13 +280,13 @@ class LearningPipeline:
             if chef.synthesis_strategy == "per_class":
                 use_per_class = True
             elif chef.synthesis_strategy == "auto":
-                classes = chef.learner._get_classes(chef.dataset)
+                classes = chef.learner._get_classes(train_dataset)
                 use_per_class = len(classes) > 1
 
             if use_per_class:
-                rules = chef.learner.synthesize_ruleset_per_class(chef.dataset)
+                rules = chef.learner.synthesize_ruleset_per_class(train_dataset)
             else:
-                rules = chef.learner.synthesize_ruleset(chef.dataset)
+                rules = chef.learner.synthesize_ruleset(train_dataset)
 
             if not rules:
                 print("Failed to synthesize rules")

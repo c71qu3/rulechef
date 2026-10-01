@@ -201,6 +201,11 @@ def select_split(dataset: Dataset, split: str) -> Dataset:
     )
 
 
+def is_reliable(dataset: Dataset) ->  bool:
+    """Whether a split view has enough samples to be trusted."""
+    return len(dataset.get_all_training_data()) >= MIN_SPLIT_SIZE
+
+
 # TODO: Replace with new methods
 def split_dataset(
     dataset: Dataset,
