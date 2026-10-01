@@ -45,6 +45,8 @@ class DatasetStore:
                     expected_output=ex["expected_output"],
                     source=ex["source"],
                     confidence=ex.get("confidence", 0.8),
+                    split=ex.get("split", "unassigned"),
+                    group=ex.get("group"),
                 )
                 dataset.examples.append(example)
 
@@ -56,6 +58,7 @@ class DatasetStore:
                     model_output=corr["model_output"],
                     expected_output=corr["expected_output"],
                     feedback=corr.get("feedback"),
+                    split=corr.get("split", "train"),
                 )
                 dataset.corrections.append(correction)
 
