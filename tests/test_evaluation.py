@@ -15,6 +15,7 @@ from rulechef.evaluation import (
     _match_entities,
     evaluate_dataset,
     evaluate_rules_individually,
+    EvalResult,
 )
 
 # =========================================================================
@@ -372,3 +373,17 @@ class TestEvaluateRulesIndividually:
         assert rb.precision == pytest.approx(0.5)
         assert rb.covered_expected == 1
         assert rb.total_expected == 3
+
+
+# ========================================================================
+# check for exploratory status
+# ========================================================================
+
+
+class TestEvalResultExploratory:
+    def test_defaults_false(self):
+        assert EvalResult().exploratory is False
+
+    def test_included_in_to_dict(self):
+        r = EvalResult(exploratory=True)
+        assert r.to_dict()["exploratory"] is True

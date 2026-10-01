@@ -449,24 +449,41 @@ class RuleLearner:
             rule set with the highest micro F1 seen across iterations. When a
             holdout is active, best_eval_result is measured on the dev set.
         """
-        from rulechef.splitting import split_dataset
+        from rulechef.splitting import assign_splits, is_reliable, select_split
 
         # Read intervals from coordinator if available
         if coordinator and hasattr(coordinator, "audit_interval"):
             audit_interval = coordinator.audit_interval
         critic_interval = getattr(coordinator, "critic_interval", 0) if coordinator else 0
 
-        train_ds, dev_ds = split_dataset(dataset, holdout_fraction, seed=split_seed)
-        if holdout_fraction > 0 and dev_ds is None:
-            print("⚠ Dataset too small for a dev holdout, refining on training data only")
-        if dev_ds is not None:
+        if holdout_fraction:
+            print(
+                "⚠ evaluate_and_refine(holdout_fraction=...) is deprecated and ignored."
+            )
+        
+        assign_splits(dataset, seed=split_seed)
+
+        train_ds = select_split(dataset, "train")
+        selection_ds = select_split(dataset, "selection")
+        calibration_ds = select_split(dataset, "calibration")
+        
+        use_selection = is_reliable(selection_ds)
+        select_ds = selection_ds if use_selection else train_ds
+        selection_exploratory = not use_selection
+
+        if selection_exploratory:
             print(
                 f"\n🔄 Refinement loop (max {max_iterations} iterations, "
-                f"train={len(train_ds.get_all_training_data())}, dev={len(dev_ds.examples)})"
+                f"train={len(train_ds.get_all_training_data())}, "
+                f"selection={len(selection_ds.examples)}; exploratory)"
             )
         else:
-            print(f"\n🔄 Refinement loop (max {max_iterations} iterations)")
-
+            print(
+                f"\n🔄 Refinement loop (max {max_iterations} iterations, "
+                f"train={len(train_ds.get_all_training_data())}, "
+                f"selection={len(selection_ds.examples)})"
+            )
+        
         best_rules = rules
         best_f1 = 0.0
         best_eval = EvalResult()
@@ -475,23 +492,27 @@ class RuleLearner:
             iter_num = iteration + 1
             print(f"[{iter_num}/{max_iterations}] Evaluating rules...")
 
+            # Train eval is used for identifying failures / patch generation
             eval_result = self._evaluate_rules(rules, train_ds)
-            # Selection metrics come from dev when a holdout is active
-            select_eval = self._evaluate_rules(rules, dev_ds) if dev_ds is not None else eval_result
+
+            # Selection eval decides patch acceptance / best-rule tracking
+            select_eval = self._evaluate_rules(rules, select_ds)
+            select_eval.exploratory = selection_exploratory
             exact = select_eval.exact_match
             correct = int(exact * select_eval.total_docs)
 
-            if dev_ds is not None:
+            if selection_exploratory:
                 print(
                     f"[{iter_num}/{max_iterations}] Train F1: {eval_result.micro_f1:.1%} | "
-                    f"Dev exact: {exact:.1%} ({correct}/{select_eval.total_docs}), "
-                    f"dev F1: {select_eval.micro_f1:.1%}"
+                    f"Selection (exploratory) exact: {exact:.1%} "
+                    f"({correct}/{select_eval.total_docs}), "
+                    f"selection F1: {select_eval.micro_f1:.1%}"
                 )
             else:
                 print(
-                    f"[{iter_num}/{max_iterations}] Exact match: {exact:.1%} "
-                    f"({correct}/{select_eval.total_docs}), "
-                    f"micro F1: {select_eval.micro_f1:.1%}"
+                    f"[{iter_num}/{max_iterations}] Train F1: {eval_result.micro_f1:.1%} | "
+                    f"Selection exact: {exact:.1%} ({correct}/{select_eval.total_docs}), "
+                    f"selection F1: {select_eval.micro_f1:.1%}"
                 )
 
             if select_eval.micro_f1 > best_f1:
@@ -527,9 +548,8 @@ class RuleLearner:
                 rules = self._run_mid_refinement_audit(
                     rules, train_ds, coordinator, eval_result, iter_num
                 )
-                post_audit = (
-                    self._evaluate_rules(rules, dev_ds) if dev_ds is not None else eval_result
-                )
+                post_audit = self._evaluate_rules(rules, select_ds)
+                post_audit.exploratory = selectioin_exploratory
                 if post_audit.micro_f1 > best_f1:
                     best_rules = rules
                     best_f1 = post_audit.micro_f1
@@ -567,10 +587,8 @@ class RuleLearner:
                     print("⚠ Patch synthesis returned nothing, keeping best rules")
                 else:
                     candidate = self._merge_patch(rules, patch, deleted_names)
-                    if dev_ds is not None:
-                        candidate_eval = self._evaluate_rules(candidate, dev_ds)
-                    else:
-                        candidate_eval = self._evaluate_rules(candidate, train_ds)
+                    candidate_eval = self._evaluate_rules(candidate, select_ds)
+                    candidate_eval.exploratory = selection_exploratory
                     prev_f1 = select_eval.micro_f1
                     prev_p = select_eval.micro_precision
                     cand_f1 = candidate_eval.micro_f1
@@ -590,10 +608,10 @@ class RuleLearner:
                         select_eval,
                         candidate_eval,
                         accepted,
-                        on_dev=dev_ds is not None,
+                        on_dev=use_selection,
                         dataset=dataset,
                     )
-                    metric_label = "dev " if dev_ds is not None else ""
+                    metric_label = "selection " if use_selection else "exploratory "
                     if accepted:
                         rules = candidate
                         print(
@@ -616,8 +634,10 @@ class RuleLearner:
                 break
 
         # Stamp validated per-rule stats so the executor can resolve
-        # conflicts by measured precision (dev when available, else train).
-        self._stamp_validated_stats(best_rules, dev_ds or train_ds)
+        # conflicts by measured precision, on calibration split when
+        # reliable.
+        stamp_ds = calibration_ds if is_reliable(calibration_ds) else train_ds
+        self._stamp_validated_stats(best_rules, stamp_ds)
 
         return best_rules, best_eval
 

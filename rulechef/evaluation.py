@@ -103,6 +103,8 @@ class EvalResult:
     # False positive examples for refinement prompts
     fp_examples: list[dict] = field(default_factory=list)
 
+    exploratory: bool = False
+
     def to_dict(self) -> dict:
         return {
             "micro_precision": round(self.micro_precision, 4),
@@ -116,6 +118,7 @@ class EvalResult:
             "total_docs": self.total_docs,
             "per_class": [c.to_dict() for c in self.per_class],
             "failures": self.failures,
+            "exploratory": self.exploratory,
         }
 
 
